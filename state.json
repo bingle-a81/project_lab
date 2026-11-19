@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "app_version": "1.1.0",
+  "created_at": "2026-11-19 20:38:13",
+  "updated_at": "2026-11-19 20:38:59",
+  "theme": {
+    "key": "",
+    "title": ""
+  },
+  "project": {
+    "name": "project_lab",
+    "folder": "C:\\Users\\notebook\\Desktop\\projects\\project_lab"
+  },
+  "presets": {
+    "stack": "",
+    "structure": "",
+    "questions": [],
+    "invariants": ""
+  },
+  "flags": {
+    "git": false,
+    "venv": false,
+    "tests": false,
+    "html_report": false
+  },
+  "settings": {
+    "theme_mode": "dark",
+    "context_limit": 6000,
+    "last_tab": 0,
+    "autosave": true
+  },
+  "stages": [
+    {
+      "id": "idea",
+      "num": 1,
+      "title": "Идея",
+      "status": "empty",
+      "fields": {},
+      "prompt": "",
+      "llm_result": "",
+      "images": [],
+      "approved_at": "",
+      "updated_at": ""
+    },
+    {
+      "id": "charter",
+      "num": 2,
+      "title": "Паспорт",
+      "status": "empty",
+      "fields": {},
+      "prompt": "",
+      "llm_result": "",
+      "images": [],
+      "approved_at": "",
+      "updated_at": ""
+    },
+    {
+      "id": "arch",
+      "num": 3,
+      "title": "Архитектура",
+      "status": "empty",
+      "fields": {},
+      "prompt": "",
+      "llm_result": "",
+      "images": [],
+      "approved_at": "",
+      "updated_at": ""
+    },
+    {
+      "id": "skeleton",
+      "num": 4,
+      "title": "Скелет",
+      "status": "empty",
+      "fields": {},
+      "prompt": "",
+      "llm_result": "",
+      "images": [],
+      "approved_at": "",
+      "updated_at": ""
+    },
+    {
+      "id": "feature",
+      "num": 5,
+      "title": "Фича",
+      "status": "empty",
+      "fields": {},
+      "prompt": "",
+      "llm_result": "",
+      "images": [],
+      "approved_at": "",
+      "updated_at": ""
+    },
+    {
+      "id": "debug",
+      "num": 6,
+      "title": "Отладка",
+      "status": "empty",
+      "fields": {},
+      "prompt": "",
+      "llm_result": "",
+      "images": [],
+      "approved_at": "",
+      "updated_at": ""
+    },
+    {
+      "id": "summary",
+      "num": 7,
+      "title": "Итог",
+      "status": "empty",
+      "fields": {},
+      "prompt": "",
+      "llm_result": "",
+      "images": [],
+      "approved_at": "",
+      "updated_at": ""
+    }
+  ],
+  "history": []
+}
