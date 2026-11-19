@@ -1438,17 +1438,66 @@ RULES = [
     "человеку и безопасный выход.",
     "Не расширяй границы этапа. Делай только то, о чём просят сейчас; "
     "идеи на будущее выноси в раздел «следующий шаг».",
-    "Формат ответа — строго по секциям из задания. Не меняй их порядок и названия.",
+    "Формат ответа — строго по секциям из задания. Не меняй их порядок и названия."
+        "Держись строго в рамках текущего этапа и его границ. Не выполняй работу других этапов: "
+    "не пиши код там, где его не просят, не переходи к архитектуре на этапе идеи. "
+    "Всё, что выходит за рамки, вынеси в «следующий шаг» или в уточняющие вопросы.",
+
 ]
 
 # Что просим в конце каждого ответа — одинаковый «хвост» для всех этапов.
-FOOTER_LINES = [
-    "Список файлов, которые нужно создать или изменить (пути от корня проекта).",
-    "Команды для проверки — только проверенные; сомнительные помечай ТРЕБУЕТ ПРОВЕРКИ.",
-    "Риски: что может сломаться и как это заметить.",
-    "Один следующий шаг: что делаем дальше.",
-    "Уточняющие вопросы, если данных не хватает (не больше пяти).",
-]
+# Жёсткие границы каждого этапа: чего делать НЕЛЬЗЯ, чтобы модель не прыгала
+# на другие этапы и не писала код/структуру раньше времени.
+STAGE_BOUNDARIES = {
+    "idea": [
+        "Не писать код и не создавать файлы/папки.",
+        "Не проектировать архитектуру и модули.",
+        "Не выбирать окончательный стек — только варианты с пометкой ТРЕБУЕТ ПРОВЕРКИ.",
+        "Не формулировать критерии готовности — это этап «Паспорт».",
+        "Главный результат: чёткая формулировка идеи и уточняющие вопросы.",
+    ],
+    "charter": [
+        "Не писать код и не создавать файлы, кроме текста документа.",
+        "Не проектировать модули и потоки данных — это этап «Архитектура».",
+        "Не предлагать дерево папок и заготовки — это этап «Скелет».",
+        "Не придумывать критерии, которые нельзя проверить «да/нет».",
+        "Главный результат: документ-паспорт и проверяемые списки.",
+    ],
+    "arch": [
+        "Не писать реализацию и тела функций — только сигнатуры и контракты.",
+        "Не создавать дерево файлов и папки — это этап «Скелет».",
+        "Не реализовывать фичи — это этап «Фича».",
+        "Не добавлять возможности сверх паспорта.",
+        "Главный результат: модули, потоки данных, контракты, обработка ошибок.",
+    ],
+    "skeleton": [
+        "Создавать только заготовки: сигнатуры, docstring, заглушки — без рабочей логики.",
+        "Не реализовывать фичи и бизнес-логику — это этап «Фича».",
+        "Не отлаживать — это этап «Отладка».",
+        "Каждый файл давать целиком, с путём в комментарии первой строкой.",
+        "Главный результат: дерево файлов и запускаемый каркас.",
+    ],
+    "feature": [
+        "Реализовывать ровно одну заявленную фичу.",
+        "Не переписывать и не рефакторить несвязанные модули.",
+        "Не менять архитектуру без явной необходимости — сначала назвать её.",
+        "Обязательно дать тест-кейсы и способ проверить вручную.",
+        "Главный результат: работающая фича + тесты.",
+    ],
+    "debug": [
+        "Исправлять только описанную ошибку, не добавлять новый функционал.",
+        "Сначала диагноз и минимальное воспроизведение, затем исправление.",
+        "Не переписывать модуль целиком, если достаточно точечной правки.",
+        "Обязателен регресс-тест, который поймает повтор ошибки.",
+        "Главный результат: причина, фикс, регресс-тест.",
+    ],
+    "summary": [
+        "Не перепроектировать и не переделывать утверждённые этапы.",
+        "Не писать новый код — только сводка и план.",
+        "Называть противоречия между этапами и предлагать главное решение.",
+        "Главный результат: сводка, порядок работ, чек-лист, пробелы.",
+    ],
+}
 
 
 def numbered(items):
@@ -1532,6 +1581,85 @@ def stats_line(text):
     s = prompt_stats(text)
     return "символов: %d | строк: %d | слов: %d" % (s["chars"], s["lines"], s["words"])
 
+def default_prompt_config():
+    """Встроенные настройки промптов по умолчанию. Это одновременно и значения,
+    которые записываются в файл-шаблон для внешнего редактирования."""
+    return {
+        "role": ROLE_TEXT,
+        "rules": list(RULES),
+        "footer": list(FOOTER_LINES),
+        "stages": {
+            sid: {
+                "task": STAGE_SPECS.get(sid, {}).get("task", ""),
+                "answer_sections": list(STAGE_SPECS.get(sid, {}).get("answer_sections", [])),
+                "boundaries": list(STAGE_BOUNDARIES.get(sid, [])),
+            } for sid in STAGE_IDS
+        },
+    }
+
+
+def _find_prompt_config_path(folder):
+    """Ищем настройки: сначала в папке проекта, затем рядом со скриптом (глобально)."""
+    candidates = []
+    if folder:
+        candidates.append(os.path.join(folder, "prompts_config.json"))
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(os.path.join(script_dir, "prompts_config.json"))
+    except NameError:                 # __file__ может не быть в некоторых средах
+        pass
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def load_prompt_config(folder):
+    """Читает prompts_config.json и аккуратно подмешивает его к значениям по
+    умолчанию. Битый или отсутствующий файл не ломает приложение: в этом случае
+    используются встроенные значения."""
+    cfg = default_prompt_config()
+    path = _find_prompt_config_path(folder)
+    if not path:
+        return cfg
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            user = json.load(f)
+    except (ValueError, OSError) as e:
+        log("Настройки промптов не прочитаны (" + str(e) + ") — использую значения по умолчанию.", "warn")
+        return cfg
+    if not isinstance(user, dict):
+        return cfg
+    # Подмешиваем только известные ключи, не ломая структуру.
+    if isinstance(user.get("role"), str) and user["role"].strip():
+        cfg["role"] = user["role"].strip()
+    if isinstance(user.get("rules"), list):
+        cfg["rules"] = [str(r) for r in user["rules"] if str(r).strip()]
+    if isinstance(user.get("footer"), list):
+        cfg["footer"] = [str(x) for x in user["footer"] if str(x).strip()]
+    stages = user.get("stages")
+    if isinstance(stages, dict):
+        for sid, block in stages.items():
+            if sid not in cfg["stages"] or not isinstance(block, dict):
+                continue
+            if isinstance(block.get("task"), str) and block["task"].strip():
+                cfg["stages"][sid]["task"] = block["task"].strip()
+            if isinstance(block.get("answer_sections"), list):
+                cfg["stages"][sid]["answer_sections"] = [
+                    str(s) for s in block["answer_sections"] if str(s).strip()]
+            if isinstance(block.get("boundaries"), list):
+                cfg["stages"][sid]["boundaries"] = [
+                    str(s) for s in block["boundaries"] if str(s).strip()]
+    return cfg
+
+
+def write_prompt_config_template(folder):
+    """Пишет файл-шаблон со ВСЕМИ текущими значениями, чтобы человек мог править
+    текст ролей, правил, задач и границ во внешнем редакторе."""
+    path = os.path.join(folder, "prompts_config.json")
+    atomic_write(path, json.dumps(default_prompt_config(), ensure_ascii=False, indent=2))
+    log("Шаблон настроек промптов записан: " + path, "ok")
+    return path
 
 class PromptBuilder:
     """Собирает промпты этапов и мастер-промпт из состояния проекта."""
@@ -1670,23 +1798,36 @@ class PromptBuilder:
                      "не описывай картинку, которой не видишь.")
         return "\n".join(lines)
 
-    def task_block(self, sid):
-        """Задача этапа + жёсткий список секций ответа."""
-        info = STAGE_SPECS.get(sid, {})
-        task = info.get("task") or ("Помоги с этапом «" + STAGE_TITLES.get(sid, sid) + "».")
+    def _cfg(self):
+        """Свежие настройки промптов: файл prompts_config.json подмешан к значениям
+        по умолчанию. Читается при каждой сборке — внешние правки подхватываются
+        без перезапуска приложения."""
+        return load_prompt_config(self.state.folder)
+
+    def task_block(self, sid, cfg):
+        """Задача этапа + формат ответа + жёсткие границы (чего НЕ делать).
+        Границы не дают модели прыгать на другие этапы и писать код раньше времени."""
+        spec = STAGE_SPECS.get(sid, {})
+        scfg = (cfg or {}).get("stages", {}).get(sid, {})
+        task = scfg.get("task") or spec.get("task") \
+            or ("Помоги с этапом «" + STAGE_TITLES.get(sid, sid) + "».")
         lines = [task]
-        sections = info.get("answer_sections") or []
+        sections = scfg.get("answer_sections") or spec.get("answer_sections") or []
         if sections:
             lines += ["", "Ответ дай строго по секциям, с этими же заголовками:",
                       numbered(sections)]
+        bounds = scfg.get("boundaries") or STAGE_BOUNDARIES.get(sid, [])
+        if bounds:
+            lines += ["", "ЖЁСТКИЕ ГРАНИЦЫ ЭТАПА — на этом шаге ЗАПРЕЩЕНО:", bullets(bounds)]
+            lines.append("Если данных не хватает в рамках этого этапа — задай уточняющие "
+                         "вопросы, а не переходи к работе других этапов.")
         return "\n".join(lines)
 
-    # --- сборка --------------------------------------------------------------
     def build_stage_prompt(self, sid):
-        """Главная функция блока: полный промпт одного этапа.
-        Для «Итога» возвращает мастер-промпт — там другая задача."""
+        """Полный промпт одного этапа. Для «Итога» возвращает мастер-промпт."""
         if sid == "summary":
             return self.build_master_prompt()
+        cfg = self._cfg()
         title = STAGE_TITLES.get(sid, sid)
         num = STAGE_NUM.get(sid, 0)
         head = [
@@ -1699,14 +1840,14 @@ class PromptBuilder:
             "",
         ]
         blocks = [
-            ("1. РОЛЬ", ROLE_TEXT),
-            ("2. ПРАВИЛА РАБОТЫ", numbered(RULES)),
+            ("1. РОЛЬ", cfg["role"]),
+            ("2. ПРАВИЛА РАБОТЫ", numbered(cfg["rules"])),
             ("3. КОНТЕКСТ ПРОЕКТА", self.project_block()),
             ("4. ЧТО УЖЕ УТВЕРЖДЕНО (контекст предыдущих этапов)", self.previous_block(sid)),
             ("5. ОТВЕТЫ ТЕКУЩЕГО ЭТАПА", self.answers_block(sid)),
             ("6. КАРТИНКИ ЭТАПА", self.images_block(sid)),
-            ("7. ЗАДАЧА И ФОРМАТ ОТВЕТА", self.task_block(sid)),
-            ("8. ЧТО ВЕРНУТЬ В КОНЦЕ", bullets(FOOTER_LINES)),
+            ("7. ЗАДАЧА, ФОРМАТ ОТВЕТА И ГРАНИЦЫ ЭТАПА", self.task_block(sid, cfg)),
+            ("8. ЧТО ВЕРНУТЬ В КОНЦЕ", bullets(cfg["footer"])),
         ]
         body = []
         for name, text in blocks:
@@ -1714,9 +1855,9 @@ class PromptBuilder:
         return "\n".join(head + body).rstrip() + "\n"
 
     def build_master_prompt(self):
-        """Сводный промпт по всему проекту: обвязка + оглавление + все
-        утверждённые этапы + честный список пробелов + пожелания к итогу."""
+        """Сводный промпт по всему проекту (с настройками из внешнего файла)."""
         st = self.state
+        cfg = self._cfg()
         lim = self.context_limit()
         done, total = st.progress()
         head = [
@@ -1728,7 +1869,6 @@ class PromptBuilder:
             PROMPT_SEP,
             "",
         ]
-        # Оглавление: видно, что утверждено, а что осталось черновиком.
         status_ru = {"approved": "утверждён", "draft": "черновик", "empty": "пусто"}
         toc = ["Состав проекта по этапам:"]
         for s in st.data["stages"]:
@@ -1736,8 +1876,6 @@ class PromptBuilder:
                 continue
             toc.append("- Этап " + str(s["num"]) + " «" + s["title"] + "» — "
                        + status_ru.get(s["status"], s["status"]))
-
-        # Тело: утверждённые этапы целиком (в пределах лимита), с полями и ответом.
         approved_chunks = []
         truncated = False
         for s in st.data["stages"]:
@@ -1749,7 +1887,6 @@ class PromptBuilder:
                      + "(утверждён " + (s["approved_at"] or "время не указано") + ")"]
             if fields_text:
                 chunk += ["Исходные ответы пользователя:", shorten(fields_text, lim)]
-                truncated = truncated or len(fields_text) > lim
             if result_text:
                 chunk += ["Утверждённый результат:", shorten(result_text, lim)]
                 truncated = truncated or len(result_text) > lim
@@ -1757,11 +1894,8 @@ class PromptBuilder:
                 chunk += ["Приложенные файлы: " + ", ".join(s["images"])]
             approved_chunks.append("\n\n".join(chunk))
         if not approved_chunks:
-            approved_chunks = ["Ни один этап пока не утверждён. "
-                               "Начни с уточняющих вопросов и плана работ, "
-                               "не проектируй проект на пустом месте."]
-
-        # Пробелы: неутверждённые этапы перечисляем, содержимое не подставляем.
+            approved_chunks = ["Ни один этап пока не утверждён. Начни с уточняющих вопросов "
+                               "и плана работ, не проектируй проект на пустом месте."]
         gaps = [s["title"] for s in st.data["stages"]
                 if s["id"] in WORK_STAGE_IDS and s["status"] != "approved"]
         gaps_text = ("Не утверждены: " + ", ".join(gaps)
@@ -1772,24 +1906,29 @@ class PromptBuilder:
         for s in st.data["stages"]:
             all_images += list(s["images"])
         images_text = bullets(all_images) if all_images else "Картинок нет."
-        task = (STAGE_SPECS.get("summary", {}).get("task", "")
+        summary_spec = STAGE_SPECS.get("summary", {})
+        summary_scfg = cfg["stages"].get("summary", {})
+        task = ((summary_scfg.get("task") or summary_spec.get("task", ""))
                 + " Собери проект воедино по утверждённым этапам: не противоречь им, "
                   "не переделывай утверждённые решения без явной причины. "
                   "Если между этапами есть противоречие — назови его и предложи, "
                   "какое решение считать главным.")
-        sections = STAGE_SPECS.get("summary", {}).get("answer_sections") or []
+        sections = summary_scfg.get("answer_sections") or summary_spec.get("answer_sections") or []
+        bounds = summary_scfg.get("boundaries") or STAGE_BOUNDARIES.get("summary", [])
+        task_text = task + "\n\nОтвет дай строго по секциям:\n" + numbered(sections)
+        if bounds:
+            task_text += "\n\nЖЁСТКИЕ ГРАНИЦЫ:\n" + bullets(bounds)
         blocks = [
-            ("1. РОЛЬ", ROLE_TEXT),
-            ("2. ПРАВИЛА РАБОТЫ", numbered(RULES)),
+            ("1. РОЛЬ", cfg["role"]),
+            ("2. ПРАВИЛА РАБОТЫ", numbered(cfg["rules"])),
             ("3. КОНТЕКСТ ПРОЕКТА", self.project_block()),
             ("4. СОСТАВ И СОСТОЯНИЕ ЭТАПОВ", "\n".join(toc)),
             ("5. УТВЕРЖДЁННЫЕ ЭТАПЫ (главный источник истины)", "\n\n".join(approved_chunks)),
             ("6. ПРОБЕЛЫ", gaps_text),
             ("7. ПОЖЕЛАНИЯ К ИТОГУ", summary_fields or "— не заполнены —"),
-            ("8. ЗАДАЧА И ФОРМАТ ОТВЕТА",
-             task + "\n\nОтвет дай строго по секциям:\n" + numbered(sections)),
+            ("8. ЗАДАЧА И ФОРМАТ ОТВЕТА", task_text),
             ("9. ПРИЛОЖЕННЫЕ ФАЙЛЫ", images_text),
-            ("10. ЧТО ВЕРНУТЬ В КОНЦЕ", bullets(FOOTER_LINES)),
+            ("10. ЧТО ВЕРНУТЬ В КОНЦЕ", bullets(cfg["footer"])),
         ]
         body = []
         for name, text in blocks:
@@ -1799,6 +1938,7 @@ class PromptBuilder:
                      + " символов на этап. Полные версии лежат в artifacts/ проекта.", ""]
         return "\n".join(head + body).rstrip() + "\n"
 
+    
     def build_all(self):
         """Свежие промпты всех этапов. Состояние не меняем."""
         return {sid: self.build_stage_prompt(sid) for sid in STAGE_IDS}
@@ -3280,6 +3420,16 @@ class StartTab:
         self.inv_txt = add_text(body, rows=6)
         add_button(body, "Сохранить правки пресетов", self._save_presets, kind="warn")
 
+                # --- внешние настройки промптов -------------------------------------
+        add_hline(body)
+        add_label(body, "Настройки промптов — внешний файл prompts_config.json")
+        add_label(body, "Текст ролей, правил, задач и границ этапов можно править в любом "
+                        "редакторе. Пока файла нет — работают встроенные значения.", muted=True)
+        cfgrow = tk.Frame(body)
+        cfgrow.pack(fill="x", padx=8)
+        add_button(cfgrow, "Создать/обновить шаблон настроек", self._write_prompt_cfg, kind="warn")
+        add_button(cfgrow, "Перечитать настройки", self._reload_prompt_cfg, kind="warn")
+
         # --- настройки промпта ----------------------------------------------
         add_hline(body)
         add_label(body, "Лимит символов на один этап в контексте промпта "
@@ -3355,6 +3505,26 @@ class StartTab:
             idea.refresh()
         self.app.refresh_stage_tabs()
         log("Выбрана тема: " + theme["title"], "ok")
+
+    def _write_prompt_cfg(self):
+        """Пишет файл-шаблон со всеми текущими значениями для внешнего редактирования."""
+        if not self.app.state.folder:
+            messagebox.showwarning(APP_NAME, "Сначала выберите папку проекта.")
+            return
+        path = os.path.join(self.app.state.folder, "prompts_config.json")
+        if os.path.isfile(path) and not messagebox.askyesno(
+                "Файл уже есть",
+                "prompts_config.json уже существует и может быть отредактирован.\n"
+                "Перезаписать его шаблоном по умолчанию? Ваши правки будут потеряны."):
+            return
+        write_prompt_config_template(self.app.state.folder)
+
+    def _reload_prompt_cfg(self):
+        """Файл читается при каждой сборке промпта; здесь просто даём обратную связь."""
+        cfg = load_prompt_config(self.app.state.folder)
+        log("Настройки промптов перечитаны: правил — " + str(len(cfg["rules"]))
+            + ", границ на этапе «Идея» — "
+            + str(len(cfg["stages"]["idea"]["boundaries"])), "ok")
 
     def _save_presets(self):
         """Правки человека в пресетах — сохраняем в состояние."""
