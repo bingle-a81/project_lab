@@ -3,7 +3,8 @@ import copy
 import json
 import os
 
-from .config import APP_VERSION, LIMITS, SCHEMA_VERSION, STAGES, STATE_FILE, WORK_STAGE_IDS
+from .config import (APP_VERSION, LIMITS, SCHEMA_VERSION, STAGES, START_FULLSCREEN,
+                     STATE_FILE, WORK_STAGE_IDS)
 from .utils import atomic_write, ensure_dir, log, now_human, read_text
 
 
@@ -18,8 +19,8 @@ def default_state():
         "project": {"name": "", "folder": ""},
         "presets": {"stack": "", "structure": "", "questions": [], "invariants": ""},
         "flags": {"git": False, "venv": False, "tests": False, "html_report": False},
-        "settings": {"theme_mode": "dark", "context_limit": LIMITS["context_chars"],
-                     "last_tab": 0, "autosave": True},
+                "settings": {"theme_mode": "dark", "context_limit": LIMITS["context_chars"],
+                     "last_tab": 0, "autosave": True, "fullscreen": START_FULLSCREEN},
         "stages": [
             {"id": sid, "num": num, "title": title, "status": "empty",
              "fields": {}, "prompt": "", "llm_result": "", "images": [],

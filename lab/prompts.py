@@ -3,89 +3,47 @@ import json
 import os
 import sys
 
-from .config import (APP_ROOT, APP_VERSION, LIMITS, PROMPT_FILENAMES,
-                     STAGE_IDS, STAGE_NUM, STAGE_TITLES, WORK_STAGE_IDS)
-from .themes import STAGE_SPECS, assemble_idea_draft, fields_of
+from .config import (APP_ROOT, APP_VERSION, LIMITS, STAGE_IDS, STAGE_NUM,
+                     STAGE_TITLES, WORK_STAGE_IDS)
+from .themes import assemble_idea_draft, fields_of
 from .utils import atomic_write, log, now_human, platform_name, shorten
 
 PROMPT_SEP = "=" * 78
 FLAG_LABELS = {"git": "Git", "venv": "Виртуальное окружение .venv",
                "tests": "Тесты", "html_report": "HTML-отчёт"}
 
-ROLE_TEXT = (
-    "Ты — опытный инженер-наставник по Python и автоматизации. Мы ведём проект пошагово: "
-    "на каждом этапе ты решаешь ровно одну задачу и опираешься на то, что уже утверждено "
-    "на предыдущих этапах. Пользователь копирует твой ответ обратно в лабораторию, поэтому "
-    "ответ должен быть самодостаточным: без ссылок на «то, что мы обсуждали ранее».")
+# Путь к файлу стандартных настроек промптов — лежит рядом с этим модулем.
+# Весь текст промптов живёт в этом файле, а не в коде.
+_DEFAULTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "prompts_defaults.json")
 
-RULES = [
-    "Отвечай по-русски, по делу, без вводной воды и без пересказа задания.",
-    "Не выдумывай факты о данных, окружении и доступных инструментах. Чего не хватает — "
-    "задай уточняющие вопросы (не больше пяти, в конце ответа).",
-    "Всё непроверенное помечай явно: ТРЕБУЕТ ПРОВЕРКИ. Это касается команд, флагов, версий, "
-    "наличия библиотек и лицензий.",
-    "Код давай целыми файлами. Первая строка файла — комментарий с его путём от корня проекта.",
-    "Комментарии обязательны: каждая функция и каждый нетривиальный блок — что делает и зачем.",
-    "Только стандартная библиотека Python, пока иное не согласовано явно. Нужна внешняя — "
-    "сначала обоснуй и спроси, не ставь её молча.",
-    "Кроссплатформенность: пути через os.path, без shell-магии и без «зашитых» дисков. "
-    "Внешние команды — списком аргументов, без shell=True.",
-    "Никогда не предлагай молча перезаписать файлы пользователя: предупреждай и показывай, "
-    "что именно изменится.",
-    "Отсутствие инструмента или прав — не повод падать: дай понятную инструкцию и безопасный выход.",
-    "Не расширяй границы этапа. Делай только то, о чём просят сейчас; идеи на будущее — в «следующий шаг».",
-    "Формат ответа — строго по секциям из задания. Не меняй их порядок и названия.",
-    "Держись строго в рамках текущего этапа и его границ. Не выполняй работу других этапов: "
-    "не пиши код там, где его не просят, не переходи к архитектуре на этапе идеи. Всё, что выходит "
-    "за рамки, вынеси в «следующий шаг» или в уточняющие вопросы.",
-]
 
-FOOTER_LINES = [
-    "Список файлов, которые нужно создать или изменить (пути от корня проекта).",
-    "Команды для проверки — только проверенные; сомнительные помечай ТРЕБУЕТ ПРОВЕРКИ.",
-    "Риски: что может сломаться и как это заметить.",
-    "Один следующий шаг: что делаем дальше.",
-    "Уточняющие вопросы, если данных не хватает (не больше пяти).",
-]
+def _empty_prompt_config():
+    """Пустая основа — на случай, если файл стандартных настроек отсутствует."""
+    return {"role": "", "rules": [], "footer": [],
+            "stages": {sid: {"task": "", "answer_sections": [], "boundaries": []}
+                       for sid in STAGE_IDS}}
 
-# Жёсткие границы каждого этапа: чего делать НЕЛЬЗЯ, чтобы модель не прыгала
-# на другие этапы и не писала код/структуру раньше времени.
-STAGE_BOUNDARIES = {
-    "idea": ["Не писать код и не создавать файлы/папки.",
-             "Не проектировать архитектуру и модули.",
-             "Не выбирать окончательный стек — только варианты с пометкой ТРЕБУЕТ ПРОВЕРКИ.",
-             "Не формулировать критерии готовности — это этап «Паспорт».",
-             "Главный результат: чёткая формулировка идеи и уточняющие вопросы."],
-    "charter": ["Не писать код и не создавать файлы, кроме текста документа.",
-                "Не проектировать модули и потоки данных — это этап «Архитектура».",
-                "Не предлагать дерево папок и заготовки — это этап «Скелет».",
-                "Не придумывать критерии, которые нельзя проверить «да/нет».",
-                "Главный результат: документ-паспорт и проверяемые списки."],
-    "arch": ["Не писать реализацию и тела функций — только сигнатуры и контракты.",
-             "Не создавать дерево файлов и папки — это этап «Скелет».",
-             "Не реализовывать фичи — это этап «Фича».",
-             "Не добавлять возможности сверх паспорта.",
-             "Главный результат: модули, потоки данных, контракты, обработка ошибок."],
-    "skeleton": ["Создавать только заготовки: сигнатуры, docstring, заглушки — без рабочей логики.",
-                 "Не реализовывать фичи и бизнес-логику — это этап «Фича».",
-                 "Не отлаживать — это этап «Отладка».",
-                 "Каждый файл давать целиком, с путём в комментарии первой строкой.",
-                 "Главный результат: дерево файлов и запускаемый каркас."],
-    "feature": ["Реализовывать ровно одну заявленную фичу.",
-                "Не переписывать и не рефакторить несвязанные модули.",
-                "Не менять архитектуру без явной необходимости — сначала назвать её.",
-                "Обязательно дать тест-кейсы и способ проверить вручную.",
-                "Главный результат: работающая фича + тесты."],
-    "debug": ["Исправлять только описанную ошибку, не добавлять новый функционал.",
-              "Сначала диагноз и минимальное воспроизведение, затем исправление.",
-              "Не переписывать модуль целиком, если достаточно точечной правки.",
-              "Обязателен регресс-тест, который поймает повтор ошибки.",
-              "Главный результат: причина, фикс, регресс-тест."],
-    "summary": ["Не перепроектировать и не переделывать утверждённые этапы.",
-                "Не писать новый код — только сводка и план.",
-                "Называть противоречия между этапами и предлагать главное решение.",
-                "Главный результат: сводка, порядок работ, чек-лист, пробелы."],
-}
+
+def default_prompt_config():
+    """Стандартные настройки промптов из внешнего файла prompts_defaults.json.
+    Нет файла или он битый — пустая основа и предупреждение, без падения."""
+    try:
+        with open(_DEFAULTS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (ValueError, OSError) as e:
+        log("prompts_defaults.json не найден или бит (%s) — использую пустую основу." % e, "warn")
+        return _empty_prompt_config()
+    if not isinstance(data, dict):
+        return _empty_prompt_config()
+    data.setdefault("role", "")
+    data.setdefault("rules", [])
+    data.setdefault("footer", [])
+    stages = data.get("stages") if isinstance(data.get("stages"), dict) else {}
+    for sid in STAGE_IDS:                       # гарантия, что каждый этап на месте
+        stages.setdefault(sid, {"task": "", "answer_sections": [], "boundaries": []})
+    data["stages"] = stages
+    return data
 
 
 def numbered(items):
@@ -166,15 +124,6 @@ def strip_idea_placeholders(text):
 
 
 # --- prompts_config.json -----------------------------------------------------
-def default_prompt_config():
-    """Встроенные настройки промптов по умолчанию — они же идут в файл-шаблон."""
-    return {"role": ROLE_TEXT, "rules": list(RULES), "footer": list(FOOTER_LINES),
-            "stages": {sid: {"task": STAGE_SPECS.get(sid, {}).get("task", ""),
-                             "answer_sections": list(STAGE_SPECS.get(sid, {}).get("answer_sections", [])),
-                             "boundaries": list(STAGE_BOUNDARIES.get(sid, []))}
-                       for sid in STAGE_IDS}}
-
-
 def _find_prompt_config_path(folder):
     """Ищем prompts_config.json: сначала в папке проекта, затем в корне приложения."""
     candidates = []
@@ -215,9 +164,11 @@ def load_prompt_config(folder):
             if isinstance(block.get("task"), str) and block["task"].strip():
                 cfg["stages"][sid]["task"] = block["task"].strip()
             if isinstance(block.get("answer_sections"), list):
-                cfg["stages"][sid]["answer_sections"] = [str(s) for s in block["answer_sections"] if str(s).strip()]
+                cfg["stages"][sid]["answer_sections"] = [
+                    str(s) for s in block["answer_sections"] if str(s).strip()]
             if isinstance(block.get("boundaries"), list):
-                cfg["stages"][sid]["boundaries"] = [str(s) for s in block["boundaries"] if str(s).strip()]
+                cfg["stages"][sid]["boundaries"] = [
+                    str(s) for s in block["boundaries"] if str(s).strip()]
     return cfg
 
 
@@ -352,20 +303,20 @@ class PromptBuilder:
         return "\n".join(lines)
 
     def task_block(self, sid, cfg):
-        """Задача этапа + формат ответа + жёсткие границы (чего НЕ делать)."""
-        spec = STAGE_SPECS.get(sid, {})
+        """Задача этапа + формат ответа + жёсткие границы (чего НЕ делать).
+        Всё берётся из настроек (файла), а не из констант в коде."""
         scfg = (cfg or {}).get("stages", {}).get(sid, {})
-        task = scfg.get("task") or spec.get("task") \
-            or ("Помоги с этапом «" + STAGE_TITLES.get(sid, sid) + "».")
+        task = scfg.get("task") or ("Помоги с этапом «" + STAGE_TITLES.get(sid, sid) + "».")
         lines = [task]
-        sections = scfg.get("answer_sections") or spec.get("answer_sections") or []
+        sections = scfg.get("answer_sections") or []
         if sections:
-            lines += ["", "Ответ дай строго по секциям, с этими же заголовками:", numbered(sections)]
-        bounds = scfg.get("boundaries") or STAGE_BOUNDARIES.get(sid, [])
+            lines += ["", "Ответ дай строго по секциям, с этими же заголовками:",
+                      numbered(sections)]
+        bounds = scfg.get("boundaries") or []
         if bounds:
             lines += ["", "ЖЁСТКИЕ ГРАНИЦЫ ЭТАПА — на этом шаге ЗАПРЕЩЕНО:", bullets(bounds)]
-            lines.append("Если данных не хватает в рамках этого этапа — задай уточняющие вопросы, "
-                         "а не переходи к работе других этапов.")
+            lines.append("Если данных не хватает в рамках этого этапа — задай уточняющие "
+                         "вопросы, а не переходи к работе других этапов.")
         return "\n".join(lines)
 
     def build_stage_prompt(self, sid):
@@ -442,14 +393,14 @@ class PromptBuilder:
         for s in st.data["stages"]:
             all_images += list(s["images"])
         images_text = bullets(all_images) if all_images else "Картинок нет."
-        summary_spec = STAGE_SPECS.get("summary", {})
+        # Задача/секции/границы «Итога» — только из настроек (файла).
         summary_scfg = cfg["stages"].get("summary", {})
-        task = ((summary_scfg.get("task") or summary_spec.get("task", ""))
+        task = ((summary_scfg.get("task") or "Собери итоговую сводку.")
                 + " Собери проект воедино по утверждённым этапам: не противоречь им, не переделывай "
                   "утверждённые решения без явной причины. Если между этапами есть противоречие — "
                   "назови его и предложи, какое решение считать главным.")
-        sections = summary_scfg.get("answer_sections") or summary_spec.get("answer_sections") or []
-        bounds = summary_scfg.get("boundaries") or STAGE_BOUNDARIES.get("summary", [])
+        sections = summary_scfg.get("answer_sections") or []
+        bounds = summary_scfg.get("boundaries") or []
         task_text = task + "\n\nОтвет дай строго по секциям:\n" + numbered(sections)
         if bounds:
             task_text += "\n\nЖЁСТКИЕ ГРАНИЦЫ:\n" + bullets(bounds)

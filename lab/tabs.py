@@ -1,5 +1,4 @@
-# lab/tabs.py — вкладки: Старт, Идея, универсальный этап, Итог, История.
-# lab/tabs.py — вкладки: Старт, Идея, универсальный этап, Итог, История.
+# lab/tabs.py — вкладки: Старт, Идея, этапы, Скелет (с действиями на диске), Итог, История.
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -14,7 +13,29 @@ from .themes import (THEMES, THEME_ORDER, assemble_idea_draft, clone_presets,
                      questions_from_text, questions_to_text, stage_info,
                      write_themes_config_template)
 from .utils import clipboard_put, log, open_folder, safe_action
-from .widgets import ScrollFrame, add_button, add_entry, add_hline, add_label, add_text
+from .widgets import (ScrollFrame, ToolTip, add_button, add_entry, add_hline,
+                      add_label, add_text)
+
+
+def theme_tooltip(key):
+    """Текст подсказки над темой: что она предлагает и сколько вопросов добавит."""
+    theme = get_theme(key)
+    lines = [theme.get("title", key)]
+    desc = (theme.get("desc") or "").strip()
+    if desc:
+        lines.append(desc)
+    opts = [str(o) for o in (theme.get("stack_options") or [])]
+    if opts:
+        lines.append("")
+        lines.append("Стек: " + ", ".join(opts[:3]) + (" …" if len(opts) > 3 else ""))
+    extra = [str(d) for d in (theme.get("extra_dirs") or [])]
+    if extra:
+        lines.append("Доп. папки: " + ", ".join(extra[:3]) + (" …" if len(extra) > 3 else ""))
+    lines.append("Вопросов темы: %d (плюс 10 базовых)" % len(theme.get("questions") or []))
+    lines.append("")
+    lines.append("Пресеты — черновики: правьте их на «Старте».")
+    return "\n".join(lines)
+
 
 class StagePanel:
     """Нижняя половина любого этапа: промпт → копирование → результат → картинки → утверждение."""
@@ -280,8 +301,7 @@ class IdeaTab:
         clipboard_put(self.field_widgets["draft"], text)
 
     def _colorize_draft(self):
-        """Раскрашивает строки черновика по смыслу: вопросы, заполненные ответы,
-        «не заполнено» и шапка — разными цветами (переживает смену темы)."""
+        """Раскрашивает строки черновика по смыслу: вопросы, ответы, «не заполнено», шапка."""
         txt = self.field_widgets["draft"]
         txt.tag_configure("qhead", foreground=C["accent_hi"])
         txt.tag_configure("meta", foreground=C["muted"])
@@ -315,7 +335,7 @@ class IdeaTab:
 
 
 class StageTab:
-    """Универсальная вкладка для этапов 2–6: поля из STAGE_SPECS + StagePanel."""
+    """Универсальная вкладка этапа: поля из STAGE_SPECS + StagePanel."""
 
     def __init__(self, parent, app, sid):
         self.app = app
@@ -324,10 +344,12 @@ class StageTab:
         scroll = ScrollFrame(self.frame)
         scroll.pack(fill="both", expand=True)
         body = scroll.inner
+        self.body = body
         self.title = str(STAGE_NUM[sid]) + ". " + STAGE_TITLES[sid]
         add_label(body, "Этап %d. %s — %s" % (STAGE_NUM[sid], STAGE_TITLES[sid],
                                                stage_info(sid, "goal")))
         self.warn_lbl = add_label(body, "", kind="warn")
+        self._build_extra_top(body)          # точка расширения для подклассов
         self.field_widgets = {}
         for f in fields_of(sid):
             add_label(body, f["label"])
@@ -342,6 +364,10 @@ class StageTab:
                            lambda k=f["key"]: self._apply_hint(k), kind="warn", pady=1)
         self.panel = StagePanel(body, app, sid, self.collect)
         self.refresh()
+
+    def _build_extra_top(self, body):
+        """Подклассы вставляют сюда свой блок над полями (по умолчанию пусто)."""
+        pass
 
     def _apply_hint(self, key):
         """Вставляет черновик темы в поле, спрашивая подтверждение при непустом поле."""
@@ -382,12 +408,155 @@ class StageTab:
         self.panel.refresh()
 
 
+class SkeletonTab(StageTab):
+    """Этап «Скелет»: поля + реальные действия на диске (перенесены со «Старта»)."""
+
+    def __init__(self, parent, app):
+        self.disk_buttons = []
+        self._action_tips = []
+        StageTab.__init__(self, parent, app, "skeleton")
+
+    def _build_extra_top(self, body):
+        """Панель реальных действий: структура, .venv, зависимости, git, проверка."""
+        add_hline(body)
+        add_label(body, "Реальные действия на диске")
+        self.folder_lbl = add_label(body, "", muted=True)
+        frow = tk.Frame(body)
+        frow.pack(fill="x", padx=4)
+        add_button(frow, "Выбрать папку", self._choose_folder, "warn")
+        add_button(frow, "Открыть папку", self._open_folder, "warn")
+
+        row1 = tk.Frame(body)
+        row1.pack(fill="x", padx=4)
+        row2 = tk.Frame(body)
+        row2.pack(fill="x", padx=4)
+        specs = [
+            (row1, "Создать структуру", self._create_structure, "accent",
+             "Создаёт папки src/ tests/ features/ docs/ data/ out/ scripts/\n"
+             "prompts/ artifacts/ images/ history/ и стартовые файлы.\n\n"
+             "В непустой папке спросит подтверждение.\n"
+             "Существующие файлы не затираются молча: по каждому будет\n"
+             "диалог «Пропустить / Перезаписать / Сохранить рядом (.new)»."),
+            (row1, "Создать окружение .venv", self._create_venv, "accent",
+             "Команда:  python -m venv .venv\n\n"
+             "Запускается тем же интерпретатором, которым открыта лаборатория.\n"
+             "Если .venv уже есть — спросит, пересоздавать ли.\n"
+             "Выполняется в фоне, кнопки на это время блокируются."),
+            (row1, "Установить зависимости", self._install_deps, "accent",
+             "Windows:  .venv\\Scripts\\python.exe -m pip install -r requirements.txt\n"
+             "Linux/macOS:  .venv/bin/python -m pip install -r requirements.txt\n\n"
+             "Если requirements.txt пуст (только комментарии) — ставить нечего,\n"
+             "команда не запускается."),
+            (row2, "Инициализировать git", self._git_init, "accent",
+             "git init  →  проверка .gitignore  →  git add -A  →\n"
+             "git commit -m \"стартовый коммит\"\n\n"
+             "Готовый репозиторий не переинициализируется, пустой коммит не создаётся.\n"
+             "Если git не знает автора — покажет команды git config для этого репозитория."),
+            (row2, "Проверить окружение", self._check_env, "warn",
+             "Собирает отчёт: версии python / pip / git, наличие папок и файлов,\n"
+             "реальная проверка права записи, состояние репозитория.\n\n"
+             "Результат — в поле ниже и в artifacts/env_report.txt."),
+        ]
+        for row, text, cmd, kind, tip in specs:
+            btn = add_button(row, text, cmd, kind)
+            self.disk_buttons.append(btn)
+            self._action_tips.append(ToolTip(btn, tip))
+
+        add_label(body, "Отчёт об окружении (заполняется кнопкой «Проверить окружение»)",
+                  muted=True)
+        self.env_txt = add_text(body, rows=9)
+        self.env_txt.configure(state="disabled")
+        add_hline(body)
+
+    # --- папка ---------------------------------------------------------------
+    def _choose_folder(self):
+        """Тот же выбор папки, что и на «Старте»: грузит состояние и конфиги проекта."""
+        self.app.start_tab._choose_folder()
+        self.refresh()
+
+    def _open_folder(self):
+        if self.app.state.folder:
+            open_folder(self.app.state.folder)
+        else:
+            log("Папка ещё не выбрана.", "warn")
+
+    def _require_folder(self):
+        if not self.app.state.folder:
+            messagebox.showwarning(APP_NAME, "Сначала выберите папку проекта.")
+            return False
+        return True
+
+    def _set_busy(self, busy):
+        """Блокируем кнопки диска на время фоновой команды."""
+        state = "disabled" if busy else "normal"
+        for b in self.disk_buttons:
+            b.configure(state=state)
+
+    # --- действия ------------------------------------------------------------
+    @safe_action("создание структуры")
+    def _create_structure(self):
+        if not self._require_folder():
+            return
+        self.app.scaffolder.create_structure()      # диалоги — в UI-потоке
+        self.app.update()
+
+    def _create_venv(self):
+        if not self._require_folder():
+            return
+        py = self.app.scaffolder.venv_python()
+        force = False
+        if os.path.exists(py):
+            force = messagebox.askyesno("Окружение уже есть", ".venv уже существует. Пересоздать его?")
+            if not force:
+                return
+        self._set_busy(True)
+        self.app.tasks.submit(lambda: self.app.scaffolder.create_venv(force),
+                              on_done=lambda r: self._set_busy(False), label="venv")
+
+    def _install_deps(self):
+        if not self._require_folder():
+            return
+        self._set_busy(True)
+        self.app.tasks.submit(self.app.scaffolder.install_deps,
+                              on_done=lambda r: self._set_busy(False), label="pip")
+
+    def _git_init(self):
+        if not self._require_folder():
+            return
+        self.app.scaffolder.ensure_gitignore()      # диалог — в UI-потоке
+        self._set_busy(True)
+        self.app.tasks.submit(self.app.scaffolder.git_init_commit,
+                              on_done=lambda r: self._set_busy(False), label="git")
+
+    def _check_env(self):
+        if not self._require_folder():
+            return
+        self._set_busy(True)
+
+        def show(text):
+            self._set_busy(False)
+            if text:
+                self.env_txt.configure(state="normal")
+                self.env_txt.delete("1.0", "end")
+                self.env_txt.insert("1.0", text)
+                self.env_txt.configure(state="disabled")
+        self.app.tasks.submit(self.app.scaffolder.check_env, on_done=show, label="env")
+
+    def refresh(self):
+        StageTab.refresh(self)
+        if hasattr(self, "folder_lbl"):
+            folder = self.app.state.folder
+            self.folder_lbl.configure(
+                text=("Папка проекта: " + folder) if folder
+                else "Папка проекта не выбрана — нажмите «Выбрать папку».")
+
+
 class SummaryTab(StageTab):
     """Этап «Итог»: поля сводки + мастер-промпт + кнопки экспорта."""
 
     def __init__(self, parent, app):
         StageTab.__init__(self, parent, app, "summary")
-        body = self.frame.winfo_children()[0].inner
+        body = self.body
         add_hline(body)
         add_label(body, "Экспорт всей конструкции")
         erow = tk.Frame(body)
@@ -499,9 +668,8 @@ class HistoryTab:
 
     def _preview(self):
         f = self._selected()
-        if not f:
-            return
-        self._show(self.app.history.preview(f))
+        if f:
+            self._show(self.app.history.preview(f))
 
     def _changes(self):
         f = self._selected()
@@ -521,7 +689,7 @@ class HistoryTab:
 
 
 class StartTab:
-    """Вкладка «Старт»: выбор темы, пресеты, папка и реальные действия на диске."""
+    """Вкладка «Старт»: тема с подсказками, пресеты, папка, внешние конфиги."""
 
     def __init__(self, parent, app):
         self.app = app
@@ -530,9 +698,10 @@ class StartTab:
         scroll.pack(fill="both", expand=True)
         body = scroll.inner
         self.title = "Старт"
+        self._theme_tips = []
 
         # --- тема ------------------------------------------------------------
-        add_label(body, "Тема проекта (пресеты — черновики, ничего не навязывают)")
+        add_label(body, "Тема проекта — наведите курсор на название, чтобы увидеть подсказку")
         self.theme_var = tk.StringVar(value=app.state.data["theme"]["key"] or "blank")
         self.theme_row = tk.Frame(body)
         self.theme_row.pack(fill="x", padx=8)
@@ -570,7 +739,7 @@ class StartTab:
         add_label(body, "Внешние файлы настроек (правятся в любом редакторе)")
         add_label(body, "prompts_config.json — роли/правила/задачи/границы промптов; "
                         "themes_config.json — пресеты тем. Пока файлов нет — работают "
-                        "встроенные значения.", muted=True)
+                        "стандартные значения из lab/*_defaults.json.", muted=True)
         cfgrow = tk.Frame(body)
         cfgrow.pack(fill="x", padx=8)
         add_button(cfgrow, "Шаблон настроек промптов", self._write_prompt_cfg, kind="warn")
@@ -578,26 +747,23 @@ class StartTab:
         add_button(cfgrow, "Шаблон пресетов тем", self._write_themes_cfg, kind="warn")
         add_button(cfgrow, "Перечитать темы", self._reload_themes_cfg, kind="warn")
 
-        # --- действия на диске ----------------------------------------------
+        # --- куда переехали действия на диске --------------------------------
         add_hline(body)
-        add_label(body, "Реальные действия на диске (работают только в выбранной папке)")
-        arow = tk.Frame(body)
-        arow.pack(fill="x", padx=8)
-        self.disk_buttons = []
-        self.disk_buttons.append(add_button(arow, "Создать структуру", self._create_structure, "accent"))
-        self.disk_buttons.append(add_button(arow, "Создать окружение .venv", self._create_venv, "accent"))
-        self.disk_buttons.append(add_button(arow, "Установить зависимости", self._install_deps, "accent"))
-        self.disk_buttons.append(add_button(arow, "Инициализировать git", self._git_init, "accent"))
-        self.disk_buttons.append(add_button(arow, "Проверить окружение", self._check_env, "warn"))
-
-        # --- последний отчёт об окружении -----------------------------------
-        add_label(body, "Отчёт об окружении (обновляется кнопкой «Проверить окружение»)", muted=True)
-        self.env_txt = add_text(body, rows=10)
-        self.env_txt.configure(state="disabled")
+        add_label(body, "Создание структуры, .venv, установка зависимостей, git и проверка "
+                        "окружения — на вкладке «4. Скелет».", muted=True)
+        navrow = tk.Frame(body)
+        navrow.pack(fill="x", padx=8)
+        btn = add_button(navrow, "Перейти к «4. Скелет»",
+                         lambda: self.app.go_to_stage("skeleton"), kind="accent")
+        ToolTip(btn, "Открывает вкладку «Скелет»: там панель реальных действий на диске\n"
+                     "и отчёт об окружении.")
         self.refresh()
 
     def _build_theme_selector(self):
-        """(Пере)строит радиокнопки тем из актуальных THEME_ORDER/THEMES."""
+        """(Пере)строит радиокнопки тем и вешает на каждую всплывающую подсказку."""
+        for tip in self._theme_tips:
+            tip.hide()
+        self._theme_tips = []
         for child in self.theme_row.winfo_children():
             child.destroy()
         self.theme_buttons = []
@@ -607,6 +773,7 @@ class StartTab:
                                 variable=self.theme_var, command=self._on_theme)
             rb.pack(side="left", padx=6, pady=2)
             self.theme_buttons.append(rb)
+            self._theme_tips.append(ToolTip(rb, lambda k=key: theme_tooltip(k)))
 
     def _on_name(self):
         self.app.state.set_name(self.name_ent.get())
@@ -638,6 +805,7 @@ class StartTab:
         p["questions"] = questions_from_text(self.q_txt.get("1.0", "end"))
         self.app.state.touch()
         self.app.schedule_autosave()
+        self.app.refresh_stage_tabs()
         log("Пресеты сохранены.", "ok")
 
     def _choose_folder(self):
@@ -662,67 +830,6 @@ class StartTab:
             open_folder(self.app.state.folder)
         else:
             log("Папка ещё не выбрана.", "warn")
-
-    def _require_folder(self):
-        if not self.app.state.folder:
-            messagebox.showwarning(APP_NAME, "Сначала выберите папку проекта.")
-            return False
-        return True
-
-    def _set_busy(self, busy):
-        """Блокируем кнопки диска на время фоновой команды."""
-        state = "disabled" if busy else "normal"
-        for b in self.disk_buttons:
-            b.configure(state=state)
-
-    @safe_action("создание структуры")
-    def _create_structure(self):
-        if not self._require_folder():
-            return
-        self.app.scaffolder.create_structure()      # диалоги — в UI-потоке
-        self.app.update()
-
-    def _create_venv(self):
-        if not self._require_folder():
-            return
-        py = self.app.scaffolder.venv_python()
-        force = False
-        if os.path.exists(py):
-            force = messagebox.askyesno("Окружение уже есть", ".venv уже существует. Пересоздать его?")
-            if not force:
-                return
-        self._set_busy(True)
-        self.app.tasks.submit(lambda: self.app.scaffolder.create_venv(force),
-                              on_done=lambda r: self._set_busy(False), label="venv")
-
-    def _install_deps(self):
-        if not self._require_folder():
-            return
-        self._set_busy(True)
-        self.app.tasks.submit(self.app.scaffolder.install_deps,
-                              on_done=lambda r: self._set_busy(False), label="pip")
-
-    def _git_init(self):
-        if not self._require_folder():
-            return
-        self.app.scaffolder.ensure_gitignore()      # диалог — в UI-потоке
-        self._set_busy(True)
-        self.app.tasks.submit(self.app.scaffolder.git_init_commit,
-                              on_done=lambda r: self._set_busy(False), label="git")
-
-    def _check_env(self):
-        if not self._require_folder():
-            return
-        self._set_busy(True)
-
-        def show(text):
-            self._set_busy(False)
-            if text:
-                self.env_txt.configure(state="normal")
-                self.env_txt.delete("1.0", "end")
-                self.env_txt.insert("1.0", text)
-                self.env_txt.configure(state="disabled")
-        self.app.tasks.submit(self.app.scaffolder.check_env, on_done=show, label="env")
 
     # --- внешние конфиги -----------------------------------------------------
     def _write_prompt_cfg(self):
